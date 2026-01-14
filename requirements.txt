@@ -2,6 +2,7 @@ torch
 faster-whisper
 transformers
 sentencepiece
-TTS
 gradio
 numpy
+soundfile
+piper-tts
