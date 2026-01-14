@@ -1,0 +1,7 @@
+torch
+faster-whisper
+transformers
+sentencepiece
+TTS
+gradio
+numpy
