@@ -38,8 +38,7 @@ def speech_to_speech(
 
     # TTS (same voice)
     output_audio = tts.speak(
-        text=translated_text,
-        speaker_wav=speaker_path
+        text=translated_text
     )
 
     return text, translated_text, output_audio
