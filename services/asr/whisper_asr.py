@@ -1,6 +1,6 @@
 from faster_whisper import WhisperModel
 
-class WhisperASR:
+class StreamingASR:
     def __init__(self):
         self.model = WhisperModel(
             "large-v3",
@@ -8,9 +8,10 @@ class WhisperASR:
             compute_type="float16"
         )
 
-    def transcribe(self, audio_path, language=None):
+    def transcribe_chunk(self, audio_path, lang):
         segments, _ = self.model.transcribe(
             audio_path,
-            language=language
+            language=lang,
+            vad_filter=True
         )
-        return " ".join([seg.text for seg in segments])
+        return " ".join(seg.text for seg in segments)
