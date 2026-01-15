@@ -1,27 +1,25 @@
 import subprocess
-import uuid
+import tempfile
 import os
 
-class TTSEngine:
+class StreamingTTS:
     def __init__(self):
-        self.model_path = "models/en_US-lessac-medium.onnx"
-        os.makedirs("outputs", exist_ok=True)
+        self.model = "models/en_US-lessac-medium.onnx"
 
-    def speak(self, text: str) -> str:
-        output_path = f"outputs/{uuid.uuid4()}.wav"
+    def speak(self, text):
+        if not text.strip():
+            return None
 
-        process = subprocess.Popen(
-            [
-                "piper",
-                "--model", self.model_path,
-                "--output_file", output_path
-            ],
+        fd, path = tempfile.mkstemp(suffix=".wav")
+        os.close(fd)
+
+        p = subprocess.Popen(
+            ["piper", "--model", self.model, "--output_file", path],
             stdin=subprocess.PIPE,
             text=True
         )
+        p.stdin.write(text)
+        p.stdin.close()
+        p.wait()
 
-        process.stdin.write(text)
-        process.stdin.close()
-        process.wait()
-
-        return output_path
+        return path
