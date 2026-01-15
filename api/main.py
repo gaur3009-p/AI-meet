@@ -1,5 +1,5 @@
 # =========================
-# FIX PYTHON PATH (COLAB)
+# PYTHON PATH FIX (COLAB)
 # =========================
 import sys
 import os
@@ -9,15 +9,12 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 # =========================
-# STANDARD IMPORTS
+# IMPORTS
 # =========================
 import gradio as gr
 import uuid
 import soundfile as sf
 
-# =========================
-# PROJECT IMPORTS
-# =========================
 from services.asr.whisper_asr import WhisperASR
 from services.translation.nllb_translate import Translator
 from services.tts.tts_engine import TTSEngine
@@ -32,16 +29,13 @@ tts = TTSEngine()
 os.makedirs("outputs", exist_ok=True)
 
 # =========================
-# CORE PIPELINE FUNCTION
+# CORE FUNCTION
 # =========================
-def speech_to_speech(input_audio, src_lang, tgt_lang):
-    """
-    input_audio: (sample_rate, numpy_array)
-    """
-    if input_audio is None:
+def speech_to_speech(audio, src_lang, tgt_lang):
+    if audio is None:
         return "", "", None
 
-    sample_rate, audio_data = input_audio
+    sample_rate, audio_data = audio
     temp_audio_path = f"/tmp/input_{uuid.uuid4()}.wav"
     sf.write(temp_audio_path, audio_data, sample_rate)
 
@@ -61,58 +55,45 @@ def speech_to_speech(input_audio, src_lang, tgt_lang):
         tgt_lang=tgt_lang
     )
 
-    # TTS (Piper)
-    output_audio_path = tts.speak(translated_text)
+    # TTS (Python 3.12 safe)
+    output_audio = tts.speak(translated_text)
 
-    return original_text, translated_text, output_audio_path
+    return original_text, translated_text, output_audio
+
 
 # =========================
-# GRADIO UI
+# GRADIO UI (v4+ CORRECT)
 # =========================
-with gr.Blocks(title="Level 1: Multilingual Speech-to-Speech") as demo:
-    gr.Markdown(
-        """
-        ## 🌍 Level 1 — Multilingual Speech-to-Speech (Python 3.12)
+with gr.Blocks() as demo:
+    gr.Markdown("## 🌍 Level 1 — Multilingual Speech-to-Speech (Python 3.12)")
 
-        **Pipeline:**  
-        Speech → Text (Whisper) → Translation (NLLB) → Speech (Piper)
-
-        ✔ Python 3.12 compatible  
-        ✔ Google Colab ready  
-        ✔ Enterprise-grade foundation
-        """
-    )
-
-    mic = gr.Audio(
+    audio_input = gr.Audio(
         type="numpy",
-        label="🎙️ Speak Here"
+        label="🎙️ Speak"
     )
 
-    with gr.Row():
-        src_lang = gr.Dropdown(
-            choices=["eng_Latn", "hin_Deva", "kan_Knda", "tam_Taml"],
-            value="hin_Deva",
-            label="Source Language"
-        )
-        tgt_lang = gr.Dropdown(
-            choices=["eng_Latn", "hin_Deva", "kan_Knda", "tam_Taml"],
-            value="eng_Latn",
-            label="Target Language"
-        )
+    src_lang = gr.Dropdown(
+        choices=["eng_Latn", "hin_Deva", "kan_Knda", "tam_Taml"],
+        value="hin_Deva",
+        label="Source Language"
+    )
 
-    run_btn = gr.Button("▶️ Translate & Speak")
+    tgt_lang = gr.Dropdown(
+        choices=["eng_Latn", "hin_Deva", "kan_Knda", "tam_Taml"],
+        value="eng_Latn",
+        label="Target Language"
+    )
 
-    original_text = gr.Textbox(label="📝 Transcribed Text")
-    translated_text = gr.Textbox(label="🌐 Translated Text")
-    output_audio = gr.Audio(label="🔊 Output Speech")
+    run_btn = gr.Button("Translate & Speak")
+
+    original_text = gr.Textbox(label="Transcription")
+    translated_text = gr.Textbox(label="Translation")
+    output_audio = gr.Audio(label="Output Audio")
 
     run_btn.click(
-        fn=speech_to_speech,
-        inputs=[mic, src_lang, tgt_lang],
+        speech_to_speech,
+        inputs=[audio_input, src_lang, tgt_lang],
         outputs=[original_text, translated_text, output_audio]
     )
 
-# =========================
-# LAUNCH APP
-# =========================
 demo.launch()
