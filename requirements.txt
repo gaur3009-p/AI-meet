@@ -1,8 +1,15 @@
+# Core ML
 torch
 faster-whisper
 transformers
 sentencepiece
-gradio
-numpy
+
+# Audio
 soundfile
+numpy
+
+# UI / Streaming
+gradio
+
+# TTS (Python 3.12 compatible)
 piper-tts
