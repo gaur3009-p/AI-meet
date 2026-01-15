@@ -1,120 +1,56 @@
-# =========================
-# PYTHON PATH FIX (COLAB)
-# =========================
-import sys
-import os
+import sys, os, uuid, tempfile, soundfile as sf
+import gradio as gr
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-if PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, PROJECT_ROOT)
+sys.path.insert(0, PROJECT_ROOT)
 
-# =========================
-# IMPORTS
-# =========================
-import gradio as gr
-import uuid
-import soundfile as sf
-
-from services.asr.whisper_asr import WhisperASR
+from services.asr.whisper_streaming import StreamingASR
 from services.translation.nllb_translate import Translator
-from services.tts.tts_engine import TTSEngine
+from services.tts.piper_streaming import StreamingTTS
 
-# =========================
-# INITIALIZE SERVICES
-# =========================
-asr = WhisperASR()
+asr = StreamingASR()
 translator = Translator()
-tts = TTSEngine()
+tts = StreamingTTS()
 
-os.makedirs("outputs", exist_ok=True)
-
-# =========================
-# LANGUAGE MAPS
-# =========================
-WHISPER_LANG_MAP = {
-    "eng_Latn": "en",
+LANG_MAP = {
     "hin_Deva": "hi",
-    "tam_Taml": "ta",
-    "kan_Knda": "kn"
+    "eng_Latn": "en"
 }
 
-# =========================
-# CORE FUNCTION
-# =========================
-def speech_to_speech(audio, src_lang, tgt_lang):
+def stream_pipeline(audio, src_lang, tgt_lang):
     if audio is None:
-        return "", "", None
+        return None, None, None
 
-    sample_rate, audio_data = audio
-    temp_audio_path = f"/tmp/input_{uuid.uuid4()}.wav"
-    sf.write(temp_audio_path, audio_data, sample_rate)
+    sr, data = audio
+    path = f"/tmp/chunk_{uuid.uuid4()}.wav"
+    sf.write(path, data, sr)
 
-    # -------------------------
-    # ASR (Whisper uses ISO codes)
-    # -------------------------
-    whisper_lang = WHISPER_LANG_MAP[src_lang]
+    text = asr.transcribe_chunk(path, LANG_MAP[src_lang])
+    if not text.strip():
+        return None, None, None
 
-    original_text = asr.transcribe(
-        audio_path=temp_audio_path,
-        language=whisper_lang
-    )
+    translated = translator.translate(text, src_lang, tgt_lang)
+    audio_out = tts.speak(translated)
 
-    if not original_text.strip():
-        return "", "", None
-
-    # -------------------------
-    # TRANSLATION (NLLB codes)
-    # -------------------------
-    translated_text = translator.translate(
-        text=original_text,
-        src_lang=src_lang,
-        tgt_lang=tgt_lang
-    )
-
-    # -------------------------
-    # TTS
-    # -------------------------
-    output_audio = tts.speak(translated_text)
-
-    return original_text, translated_text, output_audio
+    return text, translated, audio_out
 
 
-# =========================
-# GRADIO UI
-# =========================
 with gr.Blocks() as demo:
-    gr.Markdown("## 🌍 Level 1 — Multilingual Speech-to-Speech")
+    gr.Markdown("## 🔴 Level 2 — Real-Time Multilingual Speech")
 
-    audio_input = gr.Audio(
-        type="numpy",
-        label="🎙️ Speak"
+    mic = gr.Audio(type="numpy", label="Live microphone")
+
+    src = gr.Dropdown(["hin_Deva", "eng_Latn"], value="hin_Deva")
+    tgt = gr.Dropdown(["eng_Latn", "hin_Deva"], value="eng_Latn")
+
+    txt = gr.Textbox(label="Live text")
+    trn = gr.Textbox(label="Live translation")
+    aud = gr.Audio(label="Live speech")
+
+    mic.stream(
+        stream_pipeline,
+        inputs=[mic, src, tgt],
+        outputs=[txt, trn, aud]
     )
 
-    src_lang = gr.Dropdown(
-        choices=["eng_Latn", "hin_Deva", "tam_Taml", "kan_Knda"],
-        value="hin_Deva",
-        label="Source Language"
-    )
-
-    tgt_lang = gr.Dropdown(
-        choices=["eng_Latn", "hin_Deva", "tam_Taml", "kan_Knda"],
-        value="eng_Latn",
-        label="Target Language"
-    )
-
-    run_btn = gr.Button("Translate & Speak")
-
-    original_text = gr.Textbox(label="Transcription")
-    translated_text = gr.Textbox(label="Translation")
-    output_audio = gr.Audio(label="Output Audio")
-
-    run_btn.click(
-        speech_to_speech,
-        inputs=[audio_input, src_lang, tgt_lang],
-        outputs=[original_text, translated_text, output_audio]
-    )
-
-# =========================
-# LAUNCH (COLAB)
-# =========================
 demo.launch(share=True)
