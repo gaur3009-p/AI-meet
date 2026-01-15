@@ -1,103 +1,148 @@
-import gradio as gr
-import shutil
+# =========================
+# FIX PYTHON PATH (COLAB)
+# =========================
+import sys
 import os
 
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
+# =========================
+# STANDARD IMPORTS
+# =========================
+import gradio as gr
+import shutil
+import uuid
+import soundfile as sf
+import tempfile
+
+# =========================
+# PROJECT IMPORTS
+# =========================
 from services.asr.whisper_asr import WhisperASR
 from services.translation.nllb_translate import Translator
 from services.tts.tts_engine import TTSEngine
 
-os.makedirs("outputs", exist_ok=True)
-
+# =========================
+# INITIALIZE SERVICES
+# =========================
 asr = WhisperASR()
 translator = Translator()
 tts = TTSEngine()
 
+os.makedirs("outputs", exist_ok=True)
+
+# =========================
+# CORE PIPELINE FUNCTION
+# =========================
 def speech_to_speech(
     input_audio,
-    speaker_voice,
     src_lang,
     tgt_lang
 ):
+    """
+    input_audio: (sample_rate, numpy_array)
+    """
+
+    if input_audio is None:
+        return "", "", None
+
+    # -------------------------
     # Save input audio
-    input_path = "temp_input.wav"
-    shutil.copy(input_audio, input_path)
+    # -------------------------
+    sample_rate, audio_data = input_audio
+    temp_audio_path = f"/tmp/input_{uuid.uuid4()}.wav"
+    sf.write(temp_audio_path, audio_data, sample_rate)
 
-    # Save speaker reference
-    speaker_path = "temp_speaker.wav"
-    shutil.copy(speaker_voice, speaker_path)
-
+    # -------------------------
     # ASR
-    text = asr.transcribe(input_path, src_lang)
+    # -------------------------
+    original_text = asr.transcribe(
+        audio_path=temp_audio_path,
+        language=src_lang
+    )
 
-    # Translation
+    if not original_text.strip():
+        return "", "", None
+
+    # -------------------------
+    # TRANSLATION
+    # -------------------------
     translated_text = translator.translate(
-        text,
+        text=original_text,
         src_lang=src_lang,
         tgt_lang=tgt_lang
     )
 
-    # TTS (same voice)
-    output_audio = tts.speak(
-        text=translated_text
+    # -------------------------
+    # TTS (Piper)
+    # -------------------------
+    output_audio_path = tts.speak(translated_text)
+
+    return original_text, translated_text, output_audio_path
+
+
+# =========================
+# GRADIO UI
+# =========================
+with gr.Blocks(title="Level 1: Multilingual Speech-to-Speech") as demo:
+    gr.Markdown(
+        """
+        ## 🌍 Level 1 — Multilingual Speech-to-Speech (Python 3.12)
+
+        **Pipeline:**  
+        Speech → Text (Whisper) → Translation (NLLB) → Speech (Piper)
+
+        ✔ Offline  
+        ✔ Python 3.12 compatible  
+        ✔ Enterprise-safe foundation
+        """
     )
 
-    return text, translated_text, output_audio
-
-
-with gr.Blocks(title="Multilingual Speech-to-Speech AI") as demo:
-    gr.Markdown("## 🌍 Multilingual Speech-to-Speech (Same Voice)")
-
     with gr.Row():
-        input_audio = gr.Audio(
-            label="Input Speech",
-            type="filepath"
-        )
-        speaker_voice = gr.Audio(
-            label="Speaker Voice Reference",
-            type="filepath"
+        mic = gr.Audio(
+            source="microphone",
+            type="numpy",
+            label="🎙️ Speak Here"
         )
 
     with gr.Row():
         src_lang = gr.Dropdown(
-            label="Source Language",
             choices=[
                 "eng_Latn",
                 "hin_Deva",
                 "kan_Knda",
                 "tam_Taml"
             ],
-            value="hin_Deva"
+            value="hin_Deva",
+            label="Source Language"
         )
+
         tgt_lang = gr.Dropdown(
-            label="Target Language",
             choices=[
                 "eng_Latn",
                 "hin_Deva",
                 "kan_Knda",
                 "tam_Taml"
             ],
-            value="eng_Latn"
+            value="eng_Latn",
+            label="Target Language"
         )
 
-    run_btn = gr.Button("Translate & Speak")
+    run_btn = gr.Button("▶️ Translate & Speak")
 
-    original_text = gr.Textbox(label="Original Text")
-    translated_text = gr.Textbox(label="Translated Text")
-    output_audio = gr.Audio(label="Output Speech")
+    original_text = gr.Textbox(label="📝 Transcribed Text")
+    translated_text = gr.Textbox(label="🌐 Translated Text")
+    output_audio = gr.Audio(label="🔊 Output Speech")
 
     run_btn.click(
-        speech_to_speech,
-        inputs=[
-            input_audio,
-            speaker_voice,
-            src_lang,
-            tgt_lang
-        ],
-        outputs=[
-            original_text,
-            translated_text,
-            output_audio
-        ]
+        fn=speech_to_speech,
+        inputs=[mic, src_lang, tgt_lang],
+        outputs=[original_text, translated_text, output_audio]
     )
 
+# =========================
+# LAUNCH APP
+# =========================
 demo.launch()
