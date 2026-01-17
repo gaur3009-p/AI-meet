@@ -8,10 +8,10 @@ class StreamingASR:
             compute_type="float16"
         )
 
-    def transcribe_chunk(self, audio_path, lang):
+    def transcribe_chunk(self, audio_path, language):
         segments, _ = self.model.transcribe(
             audio_path,
-            language=lang,
+            language=language,
             vad_filter=True
         )
         return " ".join(seg.text for seg in segments)
