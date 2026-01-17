@@ -1,66 +1,153 @@
 import os
 import sys
-
-PROJECT_ROOT = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..")
-)
-sys.path.insert(0, PROJECT_ROOT)
-
 import uuid
+import time
 import numpy as np
 import soundfile as sf
 import gradio as gr
 
-from services.asr.whisper_streaming import LiveWhisperASR
-from services.translation.nllb_translate import Translator
-from services.tts.piper_streaming import StreamingTTS
-from services.utils.phrase_commit import PhraseCommitter
+# ===============================
+# FIX PROJECT ROOT (KAGGLE SAFE)
+# ===============================
+PROJECT_ROOT = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..")
+)
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 
+# ===============================
+# IMPORT SERVICES
+# ===============================
+from services.asr.whisper_live import LiveWhisperASR
+from services.translation.nllb_translate import Translator
+from services.tts.tts_streaming import StreamingTTS
+
+# ===============================
+# INIT MODELS
+# ===============================
 asr = LiveWhisperASR()
 translator = Translator()
 tts = StreamingTTS()
-committer = PhraseCommitter()
 
 LANG_MAP = {
     "hin_Deva": "hi",
     "eng_Latn": "en"
 }
 
+# ===============================
+# STREAMING STATE
+# ===============================
 audio_buffer = []
+translated_history = []
 
+SILENCE_THRESHOLD = 0.015   # energy threshold
+SILENCE_TIME = 0.6          # seconds
+
+last_voice_time = time.time()
+
+# ===============================
+# SIMPLE VAD
+# ===============================
+def is_speech(chunk):
+    global last_voice_time
+    energy = np.sqrt(np.mean(chunk ** 2))
+
+    if energy > SILENCE_THRESHOLD:
+        last_voice_time = time.time()
+        return True
+
+    return False
+
+# ===============================
+# MAIN LIVE PIPELINE
+# ===============================
 def live_pipeline(audio, src_lang, tgt_lang):
-    global audio_buffer
+    global audio_buffer, translated_history, last_voice_time
 
     if audio is None:
-        return "", "", None
+        return "", " ".join(translated_history), None
 
     sr, chunk = audio
-    audio_buffer.append(chunk)
 
-    if len(audio_buffer) > 40:  # ~4 seconds
-        audio_buffer = audio_buffer[-40:]
+    # ---- VAD gate ----
+    speaking = is_speech(chunk)
 
-    full_audio = np.concatenate(audio_buffer)
-    path = f"/tmp/live_{uuid.uuid4()}.wav"
-    sf.write(path, full_audio, sr)
+    if speaking:
+        audio_buffer.append(chunk)
 
-    live_text = asr.transcribe(path, LANG_MAP[src_lang])
-    phrase = committer.process(live_text)
+        # keep ~2.5 seconds of audio
+        if len(audio_buffer) > 25:
+            audio_buffer = audio_buffer[-25:]
 
-    if phrase:
-        translated = translator.translate(phrase, src_lang, tgt_lang)
-        audio_out = tts.speak(translated)
-        return live_text, translated, audio_out
+        full_audio = np.concatenate(audio_buffer)
+        temp_path = f"/tmp/live_{uuid.uuid4()}.wav"
+        sf.write(temp_path, full_audio, sr)
 
-    return live_text, "", None
+        # LIVE captions (unstable)
+        live_text = asr.transcribe(
+            temp_path,
+            LANG_MAP[src_lang]
+        )
+    else:
+        live_text = ""  # freeze captions on silence
+
+    # ---- Commit on pause ----
+    pause_duration = time.time() - last_voice_time
+
+    if pause_duration >= SILENCE_TIME and audio_buffer:
+        full_audio = np.concatenate(audio_buffer)
+        commit_path = f"/tmp/commit_{uuid.uuid4()}.wav"
+        sf.write(commit_path, full_audio, sr)
+
+        final_text = asr.transcribe(
+            commit_path,
+            LANG_MAP[src_lang]
+        )
+
+        audio_buffer = []  # reset buffer
+
+        if final_text.strip():
+            translated = translator.translate(
+                final_text,
+                src_lang,
+                tgt_lang
+            )
+
+            translated_history.append(translated)
+            audio_out = tts.speak(translated)
+
+            return (
+                final_text,
+                " ".join(translated_history),
+                audio_out
+            )
+
+    return live_text, " ".join(translated_history), None
 
 
+# ===============================
+# GRADIO UI
+# ===============================
 with gr.Blocks() as demo:
     gr.Markdown("## 🔵 Level 2.7 — Live Captions + Translation")
 
-    mic = gr.Audio(type="numpy", streaming=True)
-    src = gr.Dropdown(["hin_Deva", "eng_Latn"], value="hin_Deva")
-    tgt = gr.Dropdown(["eng_Latn", "hin_Deva"], value="eng_Latn")
+    mic = gr.Audio(
+        type="numpy",
+        streaming=True,
+        label="🎙️ Speak"
+    )
+
+    src = gr.Dropdown(
+        ["hin_Deva", "eng_Latn"],
+        value="hin_Deva",
+        label="Source Language"
+    )
+
+    tgt = gr.Dropdown(
+        ["eng_Latn", "hin_Deva"],
+        value="eng_Latn",
+        label="Target Language"
+    )
 
     live_txt = gr.Textbox(label="Live Captions")
     trans_txt = gr.Textbox(label="Committed Translation")
