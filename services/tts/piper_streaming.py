@@ -1,49 +1,46 @@
 import subprocess
 import tempfile
 import os
-import shutil
+import urllib.request
 
 class StreamingTTS:
     def __init__(self):
-        # Piper voice directory (Colab-safe)
-        self.voice_dir = os.path.expanduser("~/.local/share/piper/voices")
+        # Colab-safe local directory
+        self.voice_dir = "/content/piper_voices"
         self.voice_name = "en_US-lessac-medium.onnx"
         self.model_path = os.path.join(self.voice_dir, self.voice_name)
 
         os.makedirs(self.voice_dir, exist_ok=True)
 
-        # Auto-download voice if missing (COLAB FIX)
+        # Auto-download voice if missing (NO piper.download_voices)
         if not os.path.exists(self.model_path):
-            self._download_voice()
+            self._download_voice_direct()
 
-        # Final safety check
         if not os.path.exists(self.model_path):
             raise RuntimeError(
-                f"Piper voice not found even after download: {self.model_path}"
+                f"Piper voice still missing at {self.model_path}"
             )
 
-    def _download_voice(self):
+    def _download_voice_direct(self):
         """
-        Downloads Piper voices using official CLI.
-        Works reliably in Google Colab.
+        Direct download from official Piper GitHub.
+        This works reliably in Google Colab.
         """
-        print("🔽 Piper voice not found. Downloading voices...")
+        print("🔽 Downloading Piper voice directly (Colab-safe)...")
+
+        url = (
+            "https://github.com/rhasspy/piper/releases/download/"
+            "v1.2.0/en_US-lessac-medium.onnx"
+        )
 
         try:
-            subprocess.run(
-                ["piper.download_voices"],
-                check=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True
-            )
+            urllib.request.urlretrieve(url, self.model_path)
         except Exception as e:
             raise RuntimeError(
-                "Failed to download Piper voices. "
-                "Try running `piper.download_voices` manually."
+                "Failed to download Piper voice via direct URL"
             ) from e
 
-        print("✅ Piper voice download completed.")
+        print("✅ Piper voice downloaded successfully.")
 
     def speak(self, text: str):
         if not text or not text.strip():
@@ -68,7 +65,7 @@ class StreamingTTS:
         process.stdin.close()
         process.wait()
 
-        # Safety: ensure audio file is valid
+        # Safety check
         if not os.path.exists(out_path) or os.path.getsize(out_path) < 1000:
             print("⚠️ Piper produced empty audio.")
             return None
