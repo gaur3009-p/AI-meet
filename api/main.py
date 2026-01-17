@@ -18,9 +18,9 @@ if PROJECT_ROOT not in sys.path:
 # ===============================
 # IMPORT SERVICES
 # ===============================
-from services.asr.whisper_live import LiveWhisperASR
+from services.asr.whisper_streaming import LiveWhisperASR
 from services.translation.nllb_translate import Translator
-from services.tts.tts_streaming import StreamingTTS
+from services.tts.piper_streaming import StreamingTTS
 
 # ===============================
 # INIT MODELS
