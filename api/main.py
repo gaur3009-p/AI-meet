@@ -11,7 +11,7 @@ import numpy as np
 import soundfile as sf
 import gradio as gr
 
-from services.asr.whisper_live import LiveWhisperASR
+from services.asr.whisper_streaming import LiveWhisperASR
 from services.translation.nllb_translate import Translator
 from services.tts.tts_streaming import StreamingTTS
 from utils.phrase_commit import PhraseCommitter
