@@ -1,6 +1,6 @@
 from faster_whisper import WhisperModel
 
-class StreamingASR:
+class LiveWhisperASR:
     def __init__(self):
         self.model = WhisperModel(
             "large-v3",
@@ -14,4 +14,4 @@ class StreamingASR:
             language=language,
             vad_filter=True
         )
-        return " ".join(seg.text.strip() for seg in segments)
+        return " ".join(s.text.strip() for s in segments)
