@@ -2,7 +2,6 @@ import torch
 import soundfile as sf
 import tempfile
 import os
-import numpy as np
 
 from transformers import (
     SpeechT5Processor,
@@ -14,7 +13,6 @@ class StreamingTTS:
     def __init__(self):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
-        # Load models from HuggingFace (Kaggle-safe)
         self.processor = SpeechT5Processor.from_pretrained(
             "microsoft/speecht5_tts"
         )
@@ -26,33 +24,20 @@ class StreamingTTS:
             "microsoft/speecht5_hifigan"
         ).to(self.device)
 
-        # Use a default speaker embedding (generic voice)
-        self.speaker_embeddings = torch.zeros((1, 512)).to(self.device)
+        self.speaker = torch.zeros((1, 512)).to(self.device)
 
-    def speak(self, text: str):
-        if not text or not text.strip():
-            return None
-
-        inputs = self.processor(
-            text=text,
-            return_tensors="pt"
-        ).to(self.device)
+    def speak(self, text):
+        inputs = self.processor(text=text, return_tensors="pt").to(self.device)
 
         with torch.no_grad():
             speech = self.model.generate_speech(
                 inputs["input_ids"],
-                self.speaker_embeddings,
+                self.speaker,
                 vocoder=self.vocoder
             )
 
-        # Save audio
-        fd, out_path = tempfile.mkstemp(suffix=".wav")
+        fd, path = tempfile.mkstemp(suffix=".wav")
         os.close(fd)
+        sf.write(path, speech.cpu().numpy(), 16000)
 
-        sf.write(
-            out_path,
-            speech.cpu().numpy(),
-            samplerate=16000
-        )
-
-        return out_path
+        return path
