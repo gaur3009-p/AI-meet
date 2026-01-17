@@ -14,7 +14,7 @@ import gradio as gr
 from services.asr.whisper_streaming import LiveWhisperASR
 from services.translation.nllb_translate import Translator
 from services.tts.piper_streaming import StreamingTTS
-from utils.phrase_commit import PhraseCommitter
+from services.utils.phrase_commit import PhraseCommitter
 
 asr = LiveWhisperASR()
 translator = Translator()
