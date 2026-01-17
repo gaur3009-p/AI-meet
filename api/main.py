@@ -1,9 +1,15 @@
-import sys, os, uuid
+import os
+import sys
+
+PROJECT_ROOT = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..")
+)
+sys.path.insert(0, PROJECT_ROOT)
+
+import uuid
 import numpy as np
 import soundfile as sf
 import gradio as gr
-
-sys.path.insert(0, os.path.abspath(".."))
 
 from services.asr.whisper_live import LiveWhisperASR
 from services.translation.nllb_translate import Translator
