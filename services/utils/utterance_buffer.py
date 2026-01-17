@@ -1,46 +1,93 @@
-import numpy as np
-import time
 
-class UtteranceBuffer:
-    def __init__(
-        self,
-        silence_threshold=0.02,     # higher for Gradio
-        silence_duration=0.7,       # seconds
-        max_utterance_duration=6.0  # safety flush
-    ):
-        self.buffer = []
-        self.start_time = None
-        self.last_voice_time = time.time()
+import sys, os, uuid, time
+import soundfile as sf
+import gradio as gr
 
-        self.silence_threshold = silence_threshold
-        self.silence_duration = silence_duration
-        self.max_utterance_duration = max_utterance_duration
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 
-    def add_chunk(self, audio_chunk):
-        if self.start_time is None:
-            self.start_time = time.time()
+from services.asr.whisper_streaming import StreamingASR
+from services.translation.nllb_translate import Translator
+from services.tts.piper_streaming import StreamingTTS
 
-        # RMS energy (better than mean abs)
-        energy = np.sqrt(np.mean(audio_chunk ** 2))
-        now = time.time()
+asr = StreamingASR()
+translator = Translator()
+tts = StreamingTTS()
 
-        # Voice detected
-        if energy > self.silence_threshold:
-            self.last_voice_time = now
-            self.buffer.append(audio_chunk)
-            return None
+LANG_MAP = {
+    "hin_Deva": "hi",
+    "eng_Latn": "en"
+}
 
-        # Silence detected
-        silence_time = now - self.last_voice_time
-        utterance_time = now - self.start_time
+# FORCE FLUSH TIMER
+last_flush_time = 0.0
+FLUSH_INTERVAL = 2.0   # seconds
 
-        if self.buffer and (
-            silence_time >= self.silence_duration
-            or utterance_time >= self.max_utterance_duration
-        ):
-            utterance = np.concatenate(self.buffer)
-            self.buffer = []
-            self.start_time = None
-            return utterance
+def stream_pipeline(audio, src_lang, tgt_lang):
+    global last_flush_time
 
-        return None
+    print("🔥 stream_pipeline called")
+
+    if audio is None:
+        print("❌ audio is None")
+        return "[waiting for audio]", "", None
+
+    sr, chunk = audio
+    print("✅ audio received | sr:", sr, "| samples:", len(chunk))
+
+    now = time.time()
+    if now - last_flush_time < FLUSH_INTERVAL:
+        return "[buffering utterance...]", "", None
+
+    last_flush_time = now
+
+    # save chunk
+    wav_path = f"/tmp/utt_{uuid.uuid4()}.wav"
+    sf.write(wav_path, chunk, sr)
+
+    # ASR
+    text = asr.transcribe_chunk(wav_path, LANG_MAP[src_lang])
+    if not text.strip():
+        return "[no speech detected]", "", None
+
+    # TRANSLATION
+    translated = translator.translate(text, src_lang, tgt_lang)
+
+    # TTS
+    audio_out = tts.speak(translated)
+
+    return text, translated, audio_out
+
+with gr.Blocks() as demo:
+    gr.Markdown("## 🔵 Level 2.5 — Utterance Buffered Streaming (Debug Mode)")
+
+    mic = gr.Audio(
+        type="numpy",
+        streaming=True,        
+        label="🎙️ Live Microphone"
+    )
+
+    src = gr.Dropdown(
+        ["hin_Deva", "eng_Latn"],
+        value="hin_Deva",
+        label="Source Language"
+    )
+
+    tgt = gr.Dropdown(
+        ["eng_Latn", "hin_Deva"],
+        value="eng_Latn",
+        label="Target Language"
+    )
+
+    utter_txt = gr.Textbox(label="Utterance Text")
+    trans_txt = gr.Textbox(label="Translated Text")
+    out_audio = gr.Audio(label="Translated Speech")
+
+    mic.stream(
+        fn=stream_pipeline,
+        inputs=[mic, src, tgt],
+        outputs=[utter_txt, trans_txt, out_audio]
+    )
+
+demo.launch(share=True)
