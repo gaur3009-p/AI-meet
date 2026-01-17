@@ -11,18 +11,20 @@ class Translator:
             self.model = self.model.cuda()
 
     def translate(self, text: str, src_lang: str, tgt_lang: str) -> str:
-        # Set source language
+        if not text.strip():
+            return ""
+
         self.tokenizer.src_lang = src_lang
 
         inputs = self.tokenizer(
             text,
-            return_tensors="pt"
+            return_tensors="pt",
+            padding=True
         )
 
         if torch.cuda.is_available():
             inputs = {k: v.cuda() for k, v in inputs.items()}
 
-        # Convert target language token to ID (NEW API)
         tgt_lang_id = self.tokenizer.convert_tokens_to_ids(tgt_lang)
 
         outputs = self.model.generate(
