@@ -1,73 +1,58 @@
-import subprocess
+import torch
+import soundfile as sf
 import tempfile
 import os
-import urllib.request
+import numpy as np
+
+from transformers import (
+    SpeechT5Processor,
+    SpeechT5ForTextToSpeech,
+    SpeechT5HifiGan
+)
 
 class StreamingTTS:
     def __init__(self):
-        # Colab-safe local directory
-        self.voice_dir = "/content/piper_voices"
-        self.voice_name = "en_US-lessac-medium.onnx"
-        self.model_path = os.path.join(self.voice_dir, self.voice_name)
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
-        os.makedirs(self.voice_dir, exist_ok=True)
-
-        # Auto-download voice if missing (NO piper.download_voices)
-        if not os.path.exists(self.model_path):
-            self._download_voice_direct()
-
-        if not os.path.exists(self.model_path):
-            raise RuntimeError(
-                f"Piper voice still missing at {self.model_path}"
-            )
-
-    def _download_voice_direct(self):
-        """
-        Direct download from official Piper GitHub.
-        This works reliably in Google Colab.
-        """
-        print("🔽 Downloading Piper voice directly (Colab-safe)...")
-
-        url = (
-            "https://github.com/rhasspy/piper/releases/download/"
-            "v1.2.0/en_US-lessac-medium.onnx"
+        # Load models from HuggingFace (Kaggle-safe)
+        self.processor = SpeechT5Processor.from_pretrained(
+            "microsoft/speecht5_tts"
         )
+        self.model = SpeechT5ForTextToSpeech.from_pretrained(
+            "microsoft/speecht5_tts"
+        ).to(self.device)
 
-        try:
-            urllib.request.urlretrieve(url, self.model_path)
-        except Exception as e:
-            raise RuntimeError(
-                "Failed to download Piper voice via direct URL"
-            ) from e
+        self.vocoder = SpeechT5HifiGan.from_pretrained(
+            "microsoft/speecht5_hifigan"
+        ).to(self.device)
 
-        print("✅ Piper voice downloaded successfully.")
+        # Use a default speaker embedding (generic voice)
+        self.speaker_embeddings = torch.zeros((1, 512)).to(self.device)
 
     def speak(self, text: str):
         if not text or not text.strip():
             return None
 
+        inputs = self.processor(
+            text=text,
+            return_tensors="pt"
+        ).to(self.device)
+
+        with torch.no_grad():
+            speech = self.model.generate_speech(
+                inputs["input_ids"],
+                self.speaker_embeddings,
+                vocoder=self.vocoder
+            )
+
+        # Save audio
         fd, out_path = tempfile.mkstemp(suffix=".wav")
         os.close(fd)
 
-        process = subprocess.Popen(
-            [
-                "piper",
-                "--model", self.model_path,
-                "--output_file", out_path
-            ],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True
+        sf.write(
+            out_path,
+            speech.cpu().numpy(),
+            samplerate=16000
         )
-
-        process.stdin.write(text)
-        process.stdin.close()
-        process.wait()
-
-        # Safety check
-        if not os.path.exists(out_path) or os.path.getsize(out_path) < 1000:
-            print("⚠️ Piper produced empty audio.")
-            return None
 
         return out_path
