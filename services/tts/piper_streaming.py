@@ -4,9 +4,16 @@ import os
 
 class StreamingTTS:
     def __init__(self):
-        self.model_path = "models/en_US-lessac-medium.onnx"
+        self.model_path = os.path.expanduser(
+            "~/.local/share/piper/voices/en_US-lessac-medium.onnx"
+        )
 
-    def speak(self, text):
+        if not os.path.exists(self.model_path):
+            raise RuntimeError(
+                "Piper voice not found. Run `piper.download_voices`"
+            )
+
+    def speak(self, text: str):
         if not text.strip():
             return None
 
