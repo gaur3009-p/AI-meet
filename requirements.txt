@@ -1,15 +1,45 @@
-# Core ML
 torch
+torchaudio
+
+# ASR (Automatic Speech Recognition)
 faster-whisper
+openai-whisper  # Fallback option
+
+# Translation
 transformers
 sentencepiece
+protobuf
 
-# Audio
+# TTS with Voice Cloning
+TTS# Coqui TTS (includes XTTS v2)
+coqui-tts  # Alternative package name
+
+# Audio Processing
 soundfile
 numpy
+librosa
+pydub
 
-# UI / Streaming
+# Web Interface
 gradio
 
-# TTS (Python 3.12 compatible)
-piper-tts
+# Utilities
+python-dotenv
+pyyaml
+
+# Performance Optimization
+accelerate # Faster model loading
+optimum  # Model optimization
+
+# Optional: Voice Activity Detection
+webrtcvad  # Advanced VAD
+silero-vad  # ML-based VAD
+
+# Optional: Audio Enhancement
+noisereduce  # Noise reduction
+scipy  # Signal processing
+
+# Production
+uvicorn  # ASGI server
+gunicorn  # Production server
+websockets  # Real-time streaming
