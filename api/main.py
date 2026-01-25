@@ -1,3 +1,4 @@
+# api/main.py
 import os
 import sys
 import uuid
@@ -5,13 +6,15 @@ import time
 import numpy as np
 import soundfile as sf
 import gradio as gr
+from dataclasses import dataclass
+from typing import Optional, Tuple
+from queue import Queue
+import threading
 
 # ===============================
-# FIX PROJECT ROOT (KAGGLE SAFE)
+# FIX PROJECT ROOT
 # ===============================
-PROJECT_ROOT = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..")
-)
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
@@ -20,143 +23,321 @@ if PROJECT_ROOT not in sys.path:
 # ===============================
 from services.asr.whisper_streaming import LiveWhisperASR
 from services.translation.nllb_translate import Translator
-from services.tts.piper_streaming import StreamingTTS
+from services.tts.voice_cloning_tts import VoiceCloningTTS
+from services.utils.stream_manager import StreamManager, Speaker
 
 # ===============================
-# INIT MODELS
+# INIT MODELS (SINGLETON)
 # ===============================
 asr = LiveWhisperASR()
 translator = Translator()
-tts = StreamingTTS()
+tts = VoiceCloningTTS()
 
 LANG_MAP = {
-    "hin_Deva": "hi",
-    "eng_Latn": "en"
+    "Hindi": {"code": "hin_Deva", "whisper": "hi"},
+    "English": {"code": "eng_Latn", "whisper": "en"},
+    "Spanish": {"code": "spa_Latn", "whisper": "es"},
+    "French": {"code": "fra_Latn", "whisper": "fr"},
+    "German": {"code": "deu_Latn", "whisper": "de"},
+    "Chinese": {"code": "zho_Hans", "whisper": "zh"},
+    "Japanese": {"code": "jpn_Jpan", "whisper": "ja"},
+    "Korean": {"code": "kor_Hang", "whisper": "ko"},
 }
 
 # ===============================
-# STREAMING STATE
+# GLOBAL STATE
 # ===============================
-audio_buffer = []
-translated_history = []
-
-SILENCE_THRESHOLD = 0.015   # energy threshold
-SILENCE_TIME = 0.6          # seconds
-
-last_voice_time = time.time()
+stream_manager_A = StreamManager(speaker_id="A")
+stream_manager_B = StreamManager(speaker_id="B")
 
 # ===============================
-# SIMPLE VAD
+# PROCESSING PIPELINE
 # ===============================
-def is_speech(chunk):
-    global last_voice_time
-    energy = np.sqrt(np.mean(chunk ** 2))
-
-    if energy > SILENCE_THRESHOLD:
-        last_voice_time = time.time()
-        return True
-
-    return False
-
-# ===============================
-# MAIN LIVE PIPELINE
-# ===============================
-def live_pipeline(audio, src_lang, tgt_lang):
-    global audio_buffer, translated_history, last_voice_time
-
+def process_speaker_stream(
+    audio: Optional[Tuple],
+    speaker_lang: str,
+    listener_lang: str,
+    speaker_id: str,
+    voice_reference: Optional[str] = None
+):
+    """
+    Process audio stream for one speaker.
+    
+    Args:
+        audio: (sample_rate, numpy_array) from microphone
+        speaker_lang: Language speaker is using
+        listener_lang: Language to translate to
+        speaker_id: "A" or "B"
+        voice_reference: Path to reference audio for voice cloning
+    """
+    manager = stream_manager_A if speaker_id == "A" else stream_manager_B
+    
     if audio is None:
-        return "", " ".join(translated_history), None
-
+        return manager.get_display_state()
+    
     sr, chunk = audio
-
-    # ---- VAD gate ----
-    speaking = is_speech(chunk)
-
-    if speaking:
-        audio_buffer.append(chunk)
-
-        # keep ~2.5 seconds of audio
-        if len(audio_buffer) > 25:
-            audio_buffer = audio_buffer[-25:]
-
-        full_audio = np.concatenate(audio_buffer)
-        temp_path = f"/tmp/live_{uuid.uuid4()}.wav"
-        sf.write(temp_path, full_audio, sr)
-
-        # LIVE captions (unstable)
-        live_text = asr.transcribe(
-            temp_path,
-            LANG_MAP[src_lang]
+    
+    # Convert to float32 and normalize
+    if chunk.dtype == np.int16:
+        chunk = chunk.astype(np.float32) / 32768.0
+    
+    # Add chunk to manager
+    result = manager.add_audio_chunk(chunk, sr)
+    
+    # If utterance detected, process it
+    if result and result["type"] == "utterance_complete":
+        audio_path = result["audio_path"]
+        
+        # 1. Transcribe
+        src_text = asr.transcribe(
+            audio_path,
+            LANG_MAP[speaker_lang]["whisper"]
         )
-    else:
-        live_text = ""  # freeze captions on silence
-
-    # ---- Commit on pause ----
-    pause_duration = time.time() - last_voice_time
-
-    if pause_duration >= SILENCE_TIME and audio_buffer:
-        full_audio = np.concatenate(audio_buffer)
-        commit_path = f"/tmp/commit_{uuid.uuid4()}.wav"
-        sf.write(commit_path, full_audio, sr)
-
-        final_text = asr.transcribe(
-            commit_path,
-            LANG_MAP[src_lang]
-        )
-
-        audio_buffer = []  # reset buffer
-
-        if final_text.strip():
+        
+        if src_text.strip():
+            # 2. Translate
             translated = translator.translate(
-                final_text,
-                src_lang,
-                tgt_lang
+                src_text,
+                LANG_MAP[speaker_lang]["code"],
+                LANG_MAP[listener_lang]["code"]
             )
-
-            translated_history.append(translated)
-            audio_out = tts.speak(translated)
-
-            return (
-                final_text,
-                " ".join(translated_history),
-                audio_out
-            )
-
-    return live_text, " ".join(translated_history), None
-
+            
+            # 3. Clone voice and synthesize
+            if voice_reference and os.path.exists(voice_reference):
+                audio_output = tts.speak_with_cloning(
+                    translated,
+                    voice_reference,
+                    LANG_MAP[listener_lang]["whisper"]
+                )
+            else:
+                # Fallback to default voice
+                audio_output = tts.speak(
+                    translated,
+                    LANG_MAP[listener_lang]["whisper"]
+                )
+            
+            # Update manager state
+            manager.add_translation(src_text, translated)
+            
+            return manager.get_display_state() + (audio_output,)
+    
+    # Return current state without new audio
+    return manager.get_display_state() + (None,)
 
 # ===============================
-# GRADIO UI
+# VOICE REFERENCE HANDLER
 # ===============================
-with gr.Blocks() as demo:
-    gr.Markdown("## 🔵 Level 2.7 — Live Captions + Translation")
+voice_refs = {"A": None, "B": None}
 
-    mic = gr.Audio(
-        type="numpy",
-        streaming=True,
-        label="🎙️ Speak"
+def save_voice_reference(audio, speaker_id):
+    """Save voice reference for cloning."""
+    if audio is None:
+        return f"No audio provided for Speaker {speaker_id}"
+    
+    sr, data = audio
+    
+    # Save reference
+    ref_path = f"/tmp/voice_ref_{speaker_id}.wav"
+    if data.dtype == np.int16:
+        data = data.astype(np.float32) / 32768.0
+    sf.write(ref_path, data, sr)
+    
+    voice_refs[speaker_id] = ref_path
+    return f"✓ Voice reference saved for Speaker {speaker_id}"
+
+# ===============================
+# GRADIO INTERFACE
+# ===============================
+with gr.Blocks(theme=gr.themes.Soft()) as demo:
+    gr.Markdown(
+        """
+        # 🌍 Real-Time Bidirectional Voice Translation
+        **Features:**
+        - ✨ Live streaming translation
+        - 🎭 Voice cloning for natural output
+        - 🔄 Bidirectional conversation
+        - 🌐 Multi-language support
+        """
+    )
+    
+    with gr.Tabs():
+        # ============ SPEAKER A ============
+        with gr.Tab("👤 Speaker A"):
+            gr.Markdown("### Person A - Setup & Stream")
+            
+            with gr.Row():
+                with gr.Column():
+                    lang_a = gr.Dropdown(
+                        choices=list(LANG_MAP.keys()),
+                        value="Hindi",
+                        label="Your Language"
+                    )
+                    target_lang_a = gr.Dropdown(
+                        choices=list(LANG_MAP.keys()),
+                        value="English",
+                        label="Translate to (for Person B)"
+                    )
+                
+                with gr.Column():
+                    voice_ref_a = gr.Audio(
+                        sources=["microphone"],
+                        type="numpy",
+                        label="🎤 Record Voice Sample (5-10 sec for cloning)"
+                    )
+                    voice_status_a = gr.Textbox(
+                        label="Voice Cloning Status",
+                        value="No reference recorded"
+                    )
+                    save_voice_a = gr.Button("💾 Save Voice Reference")
+            
+            gr.Markdown("---")
+            
+            mic_a = gr.Audio(
+                sources=["microphone"],
+                type="numpy",
+                streaming=True,
+                label="🎙️ Start Speaking"
+            )
+            
+            with gr.Row():
+                live_caption_a = gr.Textbox(
+                    label="📝 Live Captions (Your Speech)",
+                    lines=2
+                )
+                translation_a = gr.Textbox(
+                    label="🌐 Translation History",
+                    lines=5
+                )
+            
+            audio_output_a = gr.Audio(
+                label="🔊 Translated Output (for Person B)",
+                autoplay=True
+            )
+        
+        # ============ SPEAKER B ============
+        with gr.Tab("👤 Speaker B"):
+            gr.Markdown("### Person B - Setup & Stream")
+            
+            with gr.Row():
+                with gr.Column():
+                    lang_b = gr.Dropdown(
+                        choices=list(LANG_MAP.keys()),
+                        value="English",
+                        label="Your Language"
+                    )
+                    target_lang_b = gr.Dropdown(
+                        choices=list(LANG_MAP.keys()),
+                        value="Hindi",
+                        label="Translate to (for Person A)"
+                    )
+                
+                with gr.Column():
+                    voice_ref_b = gr.Audio(
+                        sources=["microphone"],
+                        type="numpy",
+                        label="🎤 Record Voice Sample (5-10 sec for cloning)"
+                    )
+                    voice_status_b = gr.Textbox(
+                        label="Voice Cloning Status",
+                        value="No reference recorded"
+                    )
+                    save_voice_b = gr.Button("💾 Save Voice Reference")
+            
+            gr.Markdown("---")
+            
+            mic_b = gr.Audio(
+                sources=["microphone"],
+                type="numpy",
+                streaming=True,
+                label="🎙️ Start Speaking"
+            )
+            
+            with gr.Row():
+                live_caption_b = gr.Textbox(
+                    label="📝 Live Captions (Your Speech)",
+                    lines=2
+                )
+                translation_b = gr.Textbox(
+                    label="🌐 Translation History",
+                    lines=5
+                )
+            
+            audio_output_b = gr.Audio(
+                label="🔊 Translated Output (for Person A)",
+                autoplay=True
+            )
+        
+        # ============ CONVERSATION VIEW ============
+        with gr.Tab("💬 Conversation"):
+            gr.Markdown("### Full Conversation Timeline")
+            conversation_view = gr.Textbox(
+                label="Complete Dialogue",
+                lines=15,
+                interactive=False
+            )
+            refresh_btn = gr.Button("🔄 Refresh Conversation")
+    
+    # ===============================
+    # EVENT HANDLERS
+    # ===============================
+    
+    # Voice reference saving
+    save_voice_a.click(
+        lambda x: save_voice_reference(x, "A"),
+        inputs=[voice_ref_a],
+        outputs=[voice_status_a]
+    )
+    
+    save_voice_b.click(
+        lambda x: save_voice_reference(x, "B"),
+        inputs=[voice_ref_b],
+        outputs=[voice_status_b]
+    )
+    
+    # Speaker A streaming
+    mic_a.stream(
+        lambda audio, sl, tl: process_speaker_stream(
+            audio, sl, tl, "A", voice_refs.get("A")
+        ),
+        inputs=[mic_a, lang_a, target_lang_a],
+        outputs=[live_caption_a, translation_a, audio_output_a]
+    )
+    
+    # Speaker B streaming
+    mic_b.stream(
+        lambda audio, sl, tl: process_speaker_stream(
+            audio, sl, tl, "B", voice_refs.get("B")
+        ),
+        inputs=[mic_b, lang_b, target_lang_b],
+        outputs=[live_caption_b, translation_b, audio_output_b]
+    )
+    
+    # Conversation refresh
+    def get_full_conversation():
+        conv_a = stream_manager_A.get_conversation_history()
+        conv_b = stream_manager_B.get_conversation_history()
+        
+        # Merge and sort by timestamp
+        all_msgs = conv_a + conv_b
+        all_msgs.sort(key=lambda x: x["timestamp"])
+        
+        output = []
+        for msg in all_msgs:
+            speaker = "👤 Person A" if msg["speaker"] == "A" else "👤 Person B"
+            output.append(f"{speaker} ({msg['timestamp']})")
+            output.append(f"  Original: {msg['original']}")
+            output.append(f"  Translation: {msg['translation']}")
+            output.append("")
+        
+        return "\n".join(output)
+    
+    refresh_btn.click(
+        get_full_conversation,
+        outputs=[conversation_view]
     )
 
-    src = gr.Dropdown(
-        ["hin_Deva", "eng_Latn"],
-        value="hin_Deva",
-        label="Source Language"
+if __name__ == "__main__":
+    demo.queue().launch(
+        share=True,
+        server_port=7860
     )
-
-    tgt = gr.Dropdown(
-        ["eng_Latn", "hin_Deva"],
-        value="eng_Latn",
-        label="Target Language"
-    )
-
-    live_txt = gr.Textbox(label="Live Captions")
-    trans_txt = gr.Textbox(label="Committed Translation")
-    out_audio = gr.Audio(label="Translated Speech")
-
-    mic.stream(
-        live_pipeline,
-        inputs=[mic, src, tgt],
-        outputs=[live_txt, trans_txt, out_audio]
-    )
-
-demo.launch(share=True)
