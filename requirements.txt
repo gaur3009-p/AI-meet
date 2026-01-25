@@ -11,7 +11,7 @@ sentencepiece
 protobuf
 
 # TTS with Voice Cloning
-TTS# Coqui TTS (includes XTTS v2)
+TTS  #Coqui TTS (includes XTTS v2)
 coqui-tts  # Alternative package name
 
 # Audio Processing
